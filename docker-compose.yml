@@ -1,0 +1,36 @@
+# OpenResty API Proxy Gateway - Docker Compose
+# 
+version: '3.8'
+
+services:
+  # API Proxy Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: api-gateway:latest
+    container_name: api-gateway
+    ports:
+      - "80:80"      # HTTP 代理端口
+      - "443:443"    # HTTPS 代理端口
+    environment:
+      # Provider API Keys (从 .env 文件或环境变量读取)
+      - ZERION_API_KEY=${ZERION_API_KEY:-}
+      - ZERION_ENDPOINT=${ZERION_ENDPOINT:-https://api.zerion.io}
+      - COINGECKO_API_KEY=${COINGECKO_API_KEY:-}
+      - COINGECKO_ENDPOINT=${COINGECKO_ENDPOINT:-https://api.coingecko.com}
+      - ALCHEMY_API_KEY=${ALCHEMY_API_KEY:-}
+      - ALCHEMY_ENDPOINT=${ALCHEMY_ENDPOINT:-https://eth-mainnet.g.alchemy.com}
+    volumes:
+      # 开发模式：挂载配置和代码（生产环境应移除）
+      - ./conf/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
+      - ./lua:/usr/local/openresty/lualib/custom:ro
+      # SSL 证书挂载（开发模式）
+      - ./ssl:/usr/local/openresty/nginx/ssl:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
