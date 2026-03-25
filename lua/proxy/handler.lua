@@ -95,10 +95,19 @@ local function build_upstream_headers(provider_config, request_id)
     local auth_type = provider_config.auth_type
     local auth_key = provider_config.auth_key
     
+    -- 调试日志：直接测试 os.getenv
+    local env_test = os.getenv("ZERION_API_KEY")
+    ngx.log(ngx.ERR, "[Auth DEBUG] os.getenv ZERION_API_KEY: ", env_test or "nil", ", auth_key from config: ", auth_key or "nil")
+    
+    
     if auth_type == "basic" then
         -- Basic Auth: API Key 作为用户名
+        if not auth_key or auth_key == "" then
+            ngx.log(ngx.ERR, "[Auth] API Key is empty for basic auth")
+        end
         local auth = ngx.encode_base64(auth_key .. ":")
         headers["Authorization"] = "Basic " .. auth
+        ngx.log(ngx.DEBUG, "[Auth] Authorization header: Basic ", string.sub(auth, 1, 10), "...")
     elseif auth_type == "header" then
         -- Header 传递 API Key
         headers[provider_config.auth_header] = auth_key
