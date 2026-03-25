@@ -2,6 +2,8 @@
 -- 基于 MaxMind GeoLite2 数据库进行IP地理位置查询
 
 local maxminddb = require "resty.maxminddb"
+local config = require "config"
+local cjson = require "cjson"
 
 local _M = {}
 
@@ -92,6 +94,68 @@ function _M.set_country_code()
     ngx.var.geoip_country_code = country_code
     
     ngx.log(ngx.DEBUG, "[GeoIP] IP: ", client_ip, " -> Country: ", country_code)
+end
+
+--- 检查国家访问控制
+-- @return boolean 是否允许访问
+-- @return string|nil 如果阻止，返回国家代码
+function _M.check_access()
+    local geoip_config = config.get_geoip_config()
+    
+    -- 未启用 GeoIP 控制，允许访问
+    if not geoip_config.enabled then
+        return true
+    end
+    
+    local client_ip = _M.get_client_ip()
+    local country_code = _M.lookup_country(client_ip) or "UNKNOWN"
+    
+    -- 设置国家代码变量
+    ngx.var.geoip_country_code = country_code
+    
+    -- 检查是否在列表中
+    local in_list = geoip_config.countries[country_code]
+    
+    -- 黑名单模式
+    if geoip_config.mode == "blacklist" then
+        if in_list then
+            -- 记录阻止日志
+            ngx.log(ngx.WARN, "[GeoIP] Access BLOCKED - IP: ", client_ip,
+                    ", Country: ", country_code, ", Mode: blacklist")
+            return false, country_code
+        end
+        return true
+    end
+    
+    -- 白名单模式
+    if in_list then
+        return true
+    end
+    
+    -- 检查是否允许未知国家
+    if country_code == "UNKNOWN" and geoip_config.allow_unknown then
+        return true
+    end
+    
+    -- 记录阻止日志
+    ngx.log(ngx.WARN, "[GeoIP] Access BLOCKED - IP: ", client_ip,
+            ", Country: ", country_code, ", Mode: whitelist")
+    return false, country_code
+end
+
+--- 发送访问拒绝响应
+-- @param country_code string 国家代码
+-- @param request_id string 请求ID
+function _M.send_blocked_response(country_code, request_id)
+    ngx.status = 403
+    ngx.header["Content-Type"] = "application/json"
+    ngx.header["X-Onekey-Request-Id"] = request_id or ""
+    ngx.say(cjson.encode({
+        error = "Access Denied",
+        message = "Access from your country is not allowed",
+        country_code = country_code or "UNKNOWN",
+        request_id = request_id or ""
+    }))
 end
 
 return _M

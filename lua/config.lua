@@ -63,4 +63,29 @@ function _M.has_provider(name)
     return providers[name] ~= nil
 end
 
+-- 获取 GeoIP 访问控制配置
+function _M.get_geoip_config()
+    local enabled_str = os.getenv("GEOIP_ENABLED") or "false"
+    local mode = os.getenv("GEOIP_MODE") or "blacklist"
+    local countries_str = os.getenv("GEOIP_COUNTRIES") or ""
+    local allow_unknown_str = os.getenv("GEOIP_ALLOW_UNKNOWN") or "true"
+    
+    -- 解析国家代码列表
+    local countries = {}
+    if countries_str and countries_str ~= "" then
+        for country in string.gmatch(countries_str, "([^,]+)") do
+            -- 去除空格并转为大写
+            country = country:gsub("^%s*(.-)%s*$", "%1"):upper()
+            countries[country] = true
+        end
+    end
+    
+    return {
+        enabled = enabled_str:lower() == "true",
+        mode = mode:lower(),  -- "blacklist" or "whitelist"
+        countries = countries,
+        allow_unknown = allow_unknown_str:lower() == "true"
+    }
+end
+
 return _M
