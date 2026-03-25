@@ -49,18 +49,29 @@ local function build_upstream_url(provider_config, path)
     local auth_type = provider_config.auth_type
     local auth_key = provider_config.auth_key
     
+    -- 获取查询字符串
+    local query_string = ngx.var.query_string or ""
+    
+    local url
     if auth_type == "url" then
         -- Alchemy: API Key 拼接在 URL 路径
         -- 格式: https://eth-mainnet.g.alchemy.com/v2/{api_key}/{path}
-        return endpoint .. "/v2/" .. auth_key .. "/" .. path
+        url = endpoint .. "/v2/" .. auth_key .. "/" .. path
     else
         -- 其他: 直接拼接路径
         if path and path ~= "" then
-            return endpoint .. "/" .. path
+            url = endpoint .. "/" .. path
         else
-            return endpoint
+            url = endpoint
         end
     end
+    
+    -- 添加查询字符串
+    if query_string ~= "" then
+        url = url .. "?" .. query_string
+    end
+    
+    return url
 end
 
 -- 构建上游请求头
