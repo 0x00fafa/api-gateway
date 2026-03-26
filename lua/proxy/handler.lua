@@ -12,6 +12,7 @@ local transformer = require "transformer"
 local error_module = require "transformer.error"
 local retry = require "retry"
 local degradation = require "degradation"
+local metrics = require "metrics"
 
 local _M = {}
 
@@ -547,7 +548,8 @@ function _M.handle()
         
         -- 记录成功/失败（用于熔断器状态管理）
         -- 2xx和 3xx 视为成功，4xx 和 5xx 视为失败
-        if response.status >= 200 and response.status < 400 then
+        local success = response.status >= 200 and response.status < 400
+        if success then
             circuit_breaker.record_success(provider_name)
             
             -- 10. 保存到缓存（仅对可缓存的请求）
@@ -557,6 +559,9 @@ function _M.handle()
         else
             circuit_breaker.record_failure(provider_name)
         end
+        
+        -- 记录监控指标
+        metrics.record_request(provider_name, method, response.status, duration, success)
         
         -- 添加缓存状态响应头
         if not response.headers then

@@ -5,6 +5,7 @@ local cjson = require "cjson"
 local circuit_breaker = require "circuit_breaker"
 local rate_limiter = require "rate_limiter"
 local config = require "config"
+local metrics = require "metrics"
 
 local _M = {}
 
@@ -198,6 +199,64 @@ function _M.test_circuit_breaker()
             state = circuit_breaker.get_state_info(provider)
         })
     end
+end
+
+--- 获取监控指标（Prometheus格式）
+-- GET /admin/metrics
+function _M.metrics()
+    local metrics = require "metrics"
+    
+    ngx.status = 200
+    ngx.header["Content-Type"] = "text/plain; version=0.0.4"
+    ngx.print(metrics.export_prometheus())
+end
+
+--- 获取监控指标（JSON格式）
+-- GET /admin/metrics/json
+function _M.metrics_json()
+    local metrics = require "metrics"
+    
+    send_json(200, {
+        message = "Metrics exported",
+        data = metrics.export_json()
+    })
+end
+
+--- 获取健康状态
+-- GET /admin/health
+function _M.health()
+    local circuit_breaker = require "circuit_breaker"
+    local config = require "config"
+    
+    local providers = {"zerion", "coingecko", "alchemy"}
+    local health_status = {
+        status = "healthy",
+        timestamp = ngx.now(),
+        providers = {}
+    }
+    
+    local all_healthy = true
+    for _, provider in ipairs(providers) do
+        local state_info = circuit_breaker.get_state_info(provider)
+        local is_healthy = state_info.state == "closed"
+        if not is_healthy then
+            all_healthy = false
+        end
+        
+        health_status.providers[provider] = {
+            status = is_healthy and "healthy" or "unhealthy",
+            state = state_info.state,
+            failure_count = state_info.failure_count,
+            success_count = state_info.success_count
+        }
+    end
+    
+    if not all_healthy then
+        health_status.status = "degraded"
+    end
+    
+    local status_code = all_healthy and 200 or 503
+    send_json(status_code, health_status)
 end
 
 return _M
