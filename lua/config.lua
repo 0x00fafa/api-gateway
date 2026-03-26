@@ -27,27 +27,32 @@ _M.filtered_headers = {
 
 -- 获取 Provider 配置（每次请求都重新读取环境变量）
 -- 认证方式说明：
--- - Zerion: 客户端传递 Authorization: Basic {base64(api_key:)} Header，网关透传
--- - CoinGecko: 客户端传递 x_cg_pro_api_key 或 x_cg_demo_api_key Header，网关透传
--- - Alchemy: 客户端通过 X-API-Key Header 或 api_key 参数传递，网关拼接到URL
+-- 客户端统一通过 X-API-Key Header 传递 API_KEY
+-- 网关根据各 provider 的 auth_format 配置，将 API_KEY 转换为上游所需格式
+-- - Zerion: 转换为 Authorization: Basic {base64(api_key:)} Header
+-- - CoinGecko: 转换为 x_cg_demo_api_key Header
+-- - Alchemy: 拼接到 URL 路径 /v2/{api_key}/
 function _M.get_provider(name)
     local providers = {
         zerion = {
             name = "zerion",
             endpoint = os.getenv("ZERION_ENDPOINT") or "https://api.zerion.io",
-            auth_type = "transparent",  -- 透传模式，客户端自己构造认证Header
+            auth_type = "header",  -- 认证信息注入到 Header
+            auth_format = "basic",  -- Basic Auth 格式: Authorization: Basic base64(api_key:)
             timeout = 30000  -- 30秒
         },
         coingecko = {
             name = "coingecko",
             endpoint = os.getenv("COINGECKO_ENDPOINT") or "https://api.coingecko.com",
-            auth_type = "transparent",  -- 透传模式，客户端自己构造认证Header
+            auth_type = "header",  -- 认证信息注入到 Header
+            auth_format = "x_cg_demo_api_key",  -- 自定义 Header 名称
             timeout = 30000
         },
         alchemy = {
             name = "alchemy",
             endpoint = os.getenv("ALCHEMY_ENDPOINT") or "https://eth-mainnet.g.alchemy.com",
-            auth_type = "url",  -- API Key 拼接在 URL 路径，需要客户端传递
+            auth_type = "url",  -- API Key 拼接在 URL 路径
+            auth_format = "path",  -- 路径格式: /v2/{api_key}/
             timeout = 60000  -- 60秒，区块链查询可能较慢
         }
     }

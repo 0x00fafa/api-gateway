@@ -155,51 +155,116 @@ local function get_client_ip()
     -- 使用直接连接IP
     return ngx.var.remote_addr or "unknown"
 end
---- 获取客户端传递的 API Key（用于 Alchemy URL拼接）
--- 支持两种方式：Header (X-API-Key) 或 URL 参数 (api_key)
+--- 获取客户端传递的 API Key
+-- 统一从 X-API-Key Header 获取
 -- @return string|nil API Key
 local function get_client_api_key()
-    -- 1. 优先从 Header 获取
     local api_key = ngx.var.http_x_api_key
     if api_key and api_key ~= "" then
         return api_key
     end
+    return nil
+end
+
+--- Base64 编码函数
+-- @param str string 需要编码的字符串
+-- @return string Base64编码后的字符串
+local function base64_encode(str)
+    return ngx.encode_base64(str)
+end
+
+--- 构建认证 Header
+-- 根据provider配置将API_KEY转换为上游所需的认证格式
+-- @param provider_config table Provider配置
+-- @param api_key string 客户端传递的API Key
+-- @return table 认证Header键值对
+local function build_auth_headers(provider_config, api_key)
+    local auth_headers = {}
+    local auth_type = provider_config.auth_type
+    local auth_format = provider_config.auth_format
     
-    -- 2. 从 URL 参数获取
-    local args = ngx.req.get_uri_args()
-    api_key = args.api_key
-    if api_key and api_key ~= "" then
-        return api_key
+    if auth_type == "header" and api_key then
+        if auth_format == "basic" then
+            -- Zerion: Basic Auth 格式
+            -- Authorization: Basic base64(api_key:)
+            local credentials = base64_encode(api_key .. ":")
+            auth_headers["Authorization"] = "Basic " .. credentials
+        elseif auth_format then
+            -- CoinGecko 等其他自定义 Header 格式
+            -- 直接使用 auth_format 作为 Header 名称
+            auth_headers[auth_format] = api_key
+        end
     end
     
-    return nil
+    return auth_headers
 end
 
 -- 构建上游 URL
 -- @param provider_config table Provider配置
 -- @param path string 请求路径
+-- @param api_key string|nil 客户端传递的API Key
 -- @return string|nil URL, string|nil 错误信息
-local function build_upstream_url(provider_config, path)
+local function build_upstream_url(provider_config, path, api_key)
     local endpoint = provider_config.endpoint
     local auth_type = provider_config.auth_type
+    local auth_format = provider_config.auth_format
     
     -- 获取查询字符串
     local query_string = ngx.var.query_string or ""
     
+    -- 清理路径：移除首尾斜杠
+    local clean_path = path or ""
+    clean_path = clean_path:gsub("^/+", ""):gsub("/+$", "")
+    
+    -- 调试日志
+    ngx.log(ngx.DEBUG, "build_upstream_url: endpoint=", endpoint,
+            ", auth_type=", auth_type, ", auth_format=", auth_format,
+            ", path=", path or "nil", ", clean_path=", clean_path,
+            ", api_key=", api_key and mask_api_key(api_key) or "nil")
+    
     local url
     if auth_type == "url" then
-        -- Alchemy: 路径已经包含 v2/{api_key}/... 格式，直接透传
-        -- 客户端请求格式: /alchemy/v2/{api_key}/method
-        -- 上游格式: https://eth-mainnet.g.alchemy.com/v2/{api_key}/method
-        if path and path ~= "" then
-            url = endpoint .. "/" .. path
+        -- Alchemy: 需要将 API Key 插入到 URL 路径中
+        -- 客户端请求格式: /alchemy/v2/ 或 /alchemy/v2/method
+        -- 上游格式: https://eth-mainnet.g.alchemy.com/v2/{api_key}/ 或 /v2/{api_key}/method
+        if not api_key then
+            return nil, "API Key is required via X-API-Key header"
+        end
+        
+        if auth_format == "path" then
+            -- Alchemy URL格式: /v2/{api_key} 或 /v2/{api_key}/xxx
+            -- 检测路径是否以 v2 开头（可能是 v2 或 v2/xxx）
+            if clean_path == "v2" or clean_path:match("^v2/") then
+                -- 将 v2 或 v2/xxx 转换为 v2/{api_key} 或 v2/{api_key}/xxx
+                local rest_path = ""
+                if clean_path:match("^v2/(.+)$") then
+                    rest_path = clean_path:match("^v2/(.+)$")
+                end
+                
+                if rest_path and rest_path ~= "" then
+                    url = endpoint .. "/v2/" .. api_key .. "/" .. rest_path
+                else
+                    url = endpoint .. "/v2/" .. api_key
+                end
+            elseif clean_path == "" then
+                -- 路径为空，直接构建 /v2/{api_key}
+                url = endpoint .. "/v2/" .. api_key
+            else
+                -- 其他路径，在前面添加 /v2/{api_key}/
+                url = endpoint .. "/v2/" .. api_key .. "/" .. clean_path
+            end
         else
-            url = endpoint
+            -- 其他URL格式，直接拼接
+            if clean_path ~= "" then
+                url = endpoint .. "/" .. clean_path
+            else
+                url = endpoint
+            end
         end
     else
-        -- Zerion/CoinGecko: 直接拼接路径，认证信息通过Header透传
-        if path and path ~= "" then
-            url = endpoint .. "/" .. path
+        -- Zerion/CoinGecko: 直接拼接路径，认证信息通过Header注入
+        if clean_path ~= "" then
+            url = endpoint .. "/" .. clean_path
         else
             url = endpoint
         end
@@ -210,22 +275,33 @@ local function build_upstream_url(provider_config, path)
         url = url .. "?" .. query_string
     end
     
+    -- 调试日志：输出最终URL
+    ngx.log(ngx.DEBUG, "build_upstream_url: final_url=", mask_url_api_key(url))
+    
     return url
 end
 
 -- 构建上游请求头
 -- @param provider_config table Provider配置
 -- @param request_id string 请求ID
+-- @param api_key string|nil 客户端传递的API Key
 -- @return table 请求头
-local function build_upstream_headers(provider_config, request_id)
+local function build_upstream_headers(provider_config, request_id, api_key)
     local headers = {}
     
     -- 复制客户端 Header（过滤敏感 Header）
-    -- 注意：Authorization 和 x_cg_* 等认证Header会被保留并透传
+    -- 注意：不再透传客户端的认证Header，由网关统一注入
     local client_headers = ngx.req.get_headers()
+    local filtered_auth_headers = {
+        ["authorization"] = true,
+        ["x-api-key"] = true,
+        ["x_cg_pro_api_key"] = true,
+        ["x_cg_demo_api_key"] = true
+    }
+    
     for k, v in pairs(client_headers) do
         local lower_k = string.lower(k)
-        if not config.filtered_headers[lower_k] then
+        if not config.filtered_headers[lower_k] and not filtered_auth_headers[lower_k] then
             if type(v) == "table" then
                 headers[k] = table.concat(v, ", ")
             else
@@ -238,6 +314,14 @@ local function build_upstream_headers(provider_config, request_id)
     headers["X-Onekey-Request-Id"] = request_id
     headers["X-Forwarded-For"] = ngx.var.remote_addr
     headers["X-Real-IP"] = ngx.var.remote_addr
+    
+    -- 根据 provider 配置注入认证 Header
+    if api_key then
+        local auth_headers = build_auth_headers(provider_config, api_key)
+        for k, v in pairs(auth_headers) do
+            headers[k] = v
+        end
+    end
     
     return headers
 end
@@ -319,17 +403,20 @@ function _M.handle()
         return
     end
     
-    -- 6. 构建上游请求
+    -- 6. 获取客户端 API Key
+    local api_key = get_client_api_key()
+    
+    -- 7. 构建上游请求
     local httpc = http.new()
     local timeout = ctx.provider_config.timeout or config.timeout.read
     httpc:set_timeout(timeout)
     
-    local upstream_url, url_err = build_upstream_url(ctx.provider_config, path)
+    local upstream_url, url_err = build_upstream_url(ctx.provider_config, path, api_key)
     if not upstream_url then
         return send_error(401, url_err or "API Key is required", ctx.request_id)
     end
     
-    local upstream_headers = build_upstream_headers(ctx.provider_config, ctx.request_id)
+    local upstream_headers = build_upstream_headers(ctx.provider_config, ctx.request_id, api_key)
     local method = ngx.req.get_method()
     local body = get_request_body()
     
