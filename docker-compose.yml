@@ -14,19 +14,39 @@ services:
       - "80:80"      # HTTP 代理端口
       - "443:443"    # HTTPS 代理端口
     environment:
-      # Provider API Keys (从 .env 文件或环境变量读取)
-      - ZERION_API_KEY=${ZERION_API_KEY:-}
+      # Provider Endpoints (API Key 由客户端传递)
       - ZERION_ENDPOINT=${ZERION_ENDPOINT:-https://api.zerion.io}
-      - COINGECKO_API_KEY=${COINGECKO_API_KEY:-}
       - COINGECKO_ENDPOINT=${COINGECKO_ENDPOINT:-https://api.coingecko.com}
-      - ALCHEMY_API_KEY=${ALCHEMY_API_KEY:-}
       - ALCHEMY_ENDPOINT=${ALCHEMY_ENDPOINT:-https://eth-mainnet.g.alchemy.com}
+      # GeoIP 访问控制
+      - GEOIP_ENABLED=${GEOIP_ENABLED:-false}
+      - GEOIP_MODE=${GEOIP_MODE:-blacklist}
+      - GEOIP_COUNTRIES=${GEOIP_COUNTRIES:-}
+      - GEOIP_ALLOW_UNKNOWN=${GEOIP_ALLOW_UNKNOWN:-true}
+      # 熔断器配置
+      - CIRCUIT_BREAKER_ENABLED=${CIRCUIT_BREAKER_ENABLED:-false}
+      - CIRCUIT_BREAKER_FAILURE_THRESHOLD=${CIRCUIT_BREAKER_FAILURE_THRESHOLD:-5}
+      - CIRCUIT_BREAKER_SUCCESS_THRESHOLD=${CIRCUIT_BREAKER_SUCCESS_THRESHOLD:-3}
+      - CIRCUIT_BREAKER_TIMEOUT=${CIRCUIT_BREAKER_TIMEOUT:-30}
+      - CIRCUIT_BREAKER_HALF_OPEN_REQUESTS=${CIRCUIT_BREAKER_HALF_OPEN_REQUESTS:-3}
+      # 限流器配置
+      - RATE_LIMITER_ENABLED=${RATE_LIMITER_ENABLED:-false}
+      - RATE_LIMIT_GLOBAL=${RATE_LIMIT_GLOBAL:-10000}
+      - RATE_LIMIT_PROVIDERS=${RATE_LIMIT_PROVIDERS:-{"zerion":100,"coingecko":500,"alchemy":200}}
+      - RATE_LIMIT_IP=${RATE_LIMIT_IP:-100}
+      - RATE_LIMIT_IP_BURST=${RATE_LIMIT_IP_BURST:-20}
+      - RATE_LIMIT_API_KEY=${RATE_LIMIT_API_KEY:-1000}
+      - RATE_LIMIT_API_KEY_BURST=${RATE_LIMIT_API_KEY_BURST:-100}
+      - RATE_LIMIT_URI=${RATE_LIMIT_URI:-50}
+      - RATE_LIMIT_URI_BURST=${RATE_LIMIT_URI_BURST:-10}
     volumes:
       # 开发模式：挂载配置和代码（生产环境应移除）
       - ./conf/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
       - ./lua:/usr/local/openresty/lualib/custom:ro
       # SSL 证书挂载（开发模式）
       - ./ssl:/usr/local/openresty/nginx/ssl:ro
+      # GeoIP 数据库挂载
+      - ./GeoLite2-Country.mmdb:/usr/local/openresty/geoip/GeoLite2-Country.mmdb:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/health"]

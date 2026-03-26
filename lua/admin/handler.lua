@@ -1,0 +1,203 @@
+--- OpenResty API Proxy Gateway - 管理API处理器
+-- 提供熔断器和限流器的测试和管理接口
+
+local cjson = require "cjson"
+local circuit_breaker = require "circuit_breaker"
+local rate_limiter = require "rate_limiter"
+local config = require "config"
+
+local _M = {}
+
+--- 生成 UUID
+local function generate_uuid()
+    local template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
+    return string.gsub(template, '[xy]', function(c)
+        local v = (c == 'x') and math.random(0, 0xf) or math.random(8, 0xb)
+        return string.format('%x', v)
+    end)
+end
+
+--- 发送 JSON 响应
+local function send_json(status, data)
+    ngx.status = status
+    ngx.header["Content-Type"] = "application/json"
+    ngx.say(cjson.encode(data))
+end
+
+--- 发送错误响应
+local function send_error(status, message)
+    send_json(status, {
+        error = message,
+        request_id = generate_uuid()
+    })
+end
+
+--- 熔断器状态查询
+-- GET /admin/circuit-breaker/:provider
+-- GET /admin/circuit-breaker (所有provider)
+function _M.circuit_breaker_status()
+    local uri = ngx.var.uri
+    local provider_name = uri:match("^/admin/circuit%-breaker/([^/]+)$")
+    
+    local cb_config = config.get_circuit_breaker_config()
+    
+    if provider_name then
+        -- 单个 provider 状态
+        local state_info = circuit_breaker.get_state_info(provider_name)
+        send_json(200, {
+            provider = provider_name,
+            config = cb_config,
+            state = state_info
+        })
+    else
+        -- 所有 provider 状态
+        local providers = {"zerion", "coingecko", "alchemy"}
+        local result = {
+            config = cb_config,
+            providers = {}
+        }
+        for _, provider in ipairs(providers) do
+            result.providers[provider] = circuit_breaker.get_state_info(provider)
+        end
+        send_json(200, result)
+    end
+end
+
+--- 熔断器手动触发
+-- POST /admin/circuit-breaker/:provider/trip
+function _M.circuit_breaker_trip()
+    local uri = ngx.var.uri
+    local provider_name = uri:match("^/admin/circuit%-breaker/([^/]+)/trip$")
+    
+    if not provider_name then
+        return send_error(400, "Invalid provider name")
+    end
+    
+    local success, err = circuit_breaker.trip(provider_name)
+    if success then
+        send_json(200, {
+            message = "Circuit breaker tripped successfully",
+            provider = provider_name,
+            state = circuit_breaker.get_state_info(provider_name)
+        })
+    else
+        send_error(500, err or "Failed to trip circuit breaker")
+    end
+end
+
+--- 熔断器手动恢复
+-- POST /admin/circuit-breaker/:provider/reset
+function _M.circuit_breaker_reset()
+    local uri = ngx.var.uri
+    local provider_name = uri:match("^/admin/circuit%-breaker/([^/]+)/reset$")
+    
+    if not provider_name then
+        return send_error(400, "Invalid provider name")
+    end
+    
+    local success, err = circuit_breaker.reset(provider_name)
+    if success then
+        send_json(200, {
+            message = "Circuit breaker reset successfully",
+            provider = provider_name,
+            state = circuit_breaker.get_state_info(provider_name)
+        })
+    else
+        send_error(500, err or "Failed to reset circuit breaker")
+    end
+end
+
+--- 限流器状态查询
+-- GET /admin/rate-limiter
+-- GET /admin/rate-limiter/:key
+function _M.rate_limiter_status()
+    local uri = ngx.var.uri
+    local key = uri:match("^/admin/rate%-limiter/(.+)$")
+    
+    local status = rate_limiter.get_status(key)
+    send_json(200, status)
+end
+
+--- 限流器重置
+-- POST /admin/rate-limiter/:key/reset
+function _M.rate_limiter_reset()
+    local uri = ngx.var.uri
+    local key = uri:match("^/admin/rate%-limiter/([^/]+)/reset$")
+    
+    if not key then
+        return send_error(400, "Invalid key name")
+    end
+    
+    local success, err = rate_limiter.reset(key)
+    if success then
+        send_json(200, {
+            message = "Rate limiter reset successfully",
+            key = key
+        })
+    else
+        send_error(500, err or "Failed to reset rate limiter")
+    end
+end
+
+--- 测试端点 - 模拟限流
+-- GET /admin/test/rate-limit?limit=5&burst=3
+-- 该端点会快速消耗令牌，用于测试限流功能
+function _M.test_rate_limit()
+    local args = ngx.req.get_uri_args()
+    local limit = tonumber(args.limit) or 5
+    local burst = tonumber(args.burst) or 3
+    local key = "test:rate_limit"
+    
+    local allowed = rate_limiter.token_bucket(key, limit, burst)
+    
+    if allowed then
+        send_json(200, {
+            message = "Request allowed",
+            key = key,
+            limit = limit,
+            burst = burst
+        })
+    else
+        send_json(429, {
+            error = "Too Many Requests",
+            message = "Rate limit exceeded (test endpoint)",
+            key = key,
+            limit = limit,
+            burst = burst
+        })
+    end
+end
+
+--- 测试端点 - 模拟熔断
+-- GET /admin/test/circuit-breaker?provider=test&fail=true
+-- 该端点模拟熔断器行为
+function _M.test_circuit_breaker()
+    local args = ngx.req.get_uri_args()
+    local provider = args.provider or "test"
+    local should_fail = args.fail == "true"
+    
+    local allowed, reason, retry_after = circuit_breaker.allow_request(provider)
+    
+    if not allowed then
+        circuit_breaker.send_open_response(provider, retry_after)
+        return
+    end
+    
+    if should_fail then
+        circuit_breaker.record_failure(provider)
+        send_json(500, {
+            error = "Simulated failure",
+            message = "This is a simulated failure for testing",
+            provider = provider
+        })
+    else
+        circuit_breaker.record_success(provider)
+        send_json(200, {
+            message = "Request successful",
+            provider = provider,
+            state = circuit_breaker.get_state_info(provider)
+        })
+    end
+end
+
+return _M

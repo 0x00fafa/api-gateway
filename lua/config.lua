@@ -1,6 +1,7 @@
 --- OpenResty API Proxy Gateway - 配置模块
--- 
+--
 
+local cjson = require "cjson"
 local _M = {}
 
 -- 超时配置
@@ -25,28 +26,28 @@ _M.filtered_headers = {
 }
 
 -- 获取 Provider 配置（每次请求都重新读取环境变量）
+-- 认证方式说明：
+-- - Zerion: 客户端传递 Authorization: Basic {base64(api_key:)} Header，网关透传
+-- - CoinGecko: 客户端传递 x_cg_pro_api_key 或 x_cg_demo_api_key Header，网关透传
+-- - Alchemy: 客户端通过 X-API-Key Header 或 api_key 参数传递，网关拼接到URL
 function _M.get_provider(name)
     local providers = {
         zerion = {
             name = "zerion",
             endpoint = os.getenv("ZERION_ENDPOINT") or "https://api.zerion.io",
-            auth_type = "basic",  -- Basic Auth: API Key 作为用户名
-            auth_key = os.getenv("ZERION_API_KEY") or "",
+            auth_type = "transparent",  -- 透传模式，客户端自己构造认证Header
             timeout = 30000  -- 30秒
         },
         coingecko = {
             name = "coingecko",
             endpoint = os.getenv("COINGECKO_ENDPOINT") or "https://api.coingecko.com",
-            auth_type = "header",  -- Header 传递 API Key
-            auth_key = os.getenv("COINGECKO_API_KEY") or "",
-            auth_header = "x-cg-demo-api-key",
+            auth_type = "transparent",  -- 透传模式，客户端自己构造认证Header
             timeout = 30000
         },
         alchemy = {
             name = "alchemy",
             endpoint = os.getenv("ALCHEMY_ENDPOINT") or "https://eth-mainnet.g.alchemy.com",
-            auth_type = "url",  -- API Key 拼接在 URL 路径
-            auth_key = os.getenv("ALCHEMY_API_KEY") or "",
+            auth_type = "url",  -- API Key 拼接在 URL 路径，需要客户端传递
             timeout = 60000  -- 60秒，区块链查询可能较慢
         }
     }
@@ -85,6 +86,55 @@ function _M.get_geoip_config()
         mode = mode:lower(),  -- "blacklist" or "whitelist"
         countries = countries,
         allow_unknown = allow_unknown_str:lower() == "true"
+    }
+end
+
+-- 获取熔断器配置
+function _M.get_circuit_breaker_config()
+    local enabled_str = os.getenv("CIRCUIT_BREAKER_ENABLED") or "false"
+    local failure_threshold = tonumber(os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD")) or 5
+    local success_threshold = tonumber(os.getenv("CIRCUIT_BREAKER_SUCCESS_THRESHOLD")) or 3
+    local timeout = tonumber(os.getenv("CIRCUIT_BREAKER_TIMEOUT")) or 30
+    local half_open_requests = tonumber(os.getenv("CIRCUIT_BREAKER_HALF_OPEN_REQUESTS")) or 3
+    
+    return {
+        enabled = enabled_str:lower() == "true",
+        failure_threshold = failure_threshold,
+        success_threshold = success_threshold,
+        timeout = timeout,
+        half_open_requests = half_open_requests
+    }
+end
+
+-- 获取限流器配置
+function _M.get_rate_limiter_config()
+    local enabled_str = os.getenv("RATE_LIMITER_ENABLED") or "false"
+    local global = tonumber(os.getenv("RATE_LIMIT_GLOBAL")) or 10000
+    local providers_str = os.getenv("RATE_LIMIT_PROVIDERS") or '{"zerion":100,"coingecko":500,"alchemy":200}'
+    local ip = tonumber(os.getenv("RATE_LIMIT_IP")) or 100
+    local ip_burst = tonumber(os.getenv("RATE_LIMIT_IP_BURST")) or 20
+    local api_key = tonumber(os.getenv("RATE_LIMIT_API_KEY")) or 1000
+    local api_key_burst = tonumber(os.getenv("RATE_LIMIT_API_KEY_BURST")) or 100
+    local uri = tonumber(os.getenv("RATE_LIMIT_URI")) or 50
+    local uri_burst = tonumber(os.getenv("RATE_LIMIT_URI_BURST")) or 10
+    
+    -- 解析 Provider 限流配置
+    local providers = {}
+    local decode_ok, providers_data = pcall(cjson.decode, providers_str)
+    if decode_ok and type(providers_data) == "table" then
+        providers = providers_data
+    end
+    
+    return {
+        enabled = enabled_str:lower() == "true",
+        global = global,
+        providers = providers,
+        ip = ip,
+        ip_burst = ip_burst,
+        api_key = api_key,
+        api_key_burst = api_key_burst,
+        uri = uri,
+        uri_burst = uri_burst
     }
 end
 

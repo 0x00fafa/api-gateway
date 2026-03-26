@@ -143,18 +143,37 @@ function _M.check_access()
     return false, country_code
 end
 
+--- 生成 UUID
+local function generate_uuid()
+    local template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
+    return string.gsub(template, '[xy]', function(c)
+        local v = (c == 'x') and math.random(0, 0xf) or math.random(8, 0xb)
+        return string.format('%x', v)
+    end)
+end
+
+--- 获取或生成请求 ID
+local function get_request_id()
+    local request_id = ngx.var.http_x_onekey_request_id
+    if not request_id or request_id == "" then
+        request_id = generate_uuid()
+    end
+    return request_id
+end
+
 --- 发送访问拒绝响应
 -- @param country_code string 国家代码
--- @param request_id string 请求ID
-function _M.send_blocked_response(country_code, request_id)
+function _M.send_blocked_response(country_code)
+    local request_id = get_request_id()
+    
     ngx.status = 403
     ngx.header["Content-Type"] = "application/json"
-    ngx.header["X-Onekey-Request-Id"] = request_id or ""
+    ngx.header["X-Onekey-Request-Id"] = request_id
     ngx.say(cjson.encode({
         error = "Access Denied",
         message = "Access from your country is not allowed",
         country_code = country_code or "UNKNOWN",
-        request_id = request_id or ""
+        request_id = request_id
     }))
 end
 
