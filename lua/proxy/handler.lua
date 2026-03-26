@@ -30,6 +30,97 @@ local function generate_uuid()
         return string.format('%x', v)
     end)
 end
+
+--- 敏感信息脱敏处理
+-- @param str string 需要脱敏的字符串
+-- @param show_prefix number 显示前几个字符（默认4）
+-- @param show_suffix number 显示后几个字符（默认4）
+-- @return string 脱敏后的字符串
+local function mask_sensitive(str, show_prefix, show_suffix)
+    if not str or type(str) ~= "string" or str == "" then
+        return str
+    end
+    
+    show_prefix = show_prefix or 4
+    show_suffix = show_suffix or 4
+    
+    local len = #str
+    -- 如果字符串太短，只显示部分
+    if len <= show_prefix + show_suffix then
+        return string.sub(str, 1, math.floor(len / 2)) .. "****"
+    end
+    
+    local prefix = string.sub(str, 1, show_prefix)
+    local suffix = string.sub(str, -show_suffix)
+    
+    return prefix .. "****" .. suffix
+end
+
+--- 脱敏 API Key
+-- @param api_key string API Key
+-- @return string 脱敏后的API Key
+local function mask_api_key(api_key)
+    return mask_sensitive(api_key, 4, 4)
+end
+
+--- 脱敏钱包地址
+-- @param address string 钱包地址
+-- @return string 脱敏后的钱包地址
+local function mask_wallet_address(address)
+    return mask_sensitive(address, 6, 4)
+end
+
+--- 从URL中提取并脱敏API Key和钱包地址
+-- @param url string 原始URL
+-- @return string 脱敏后的URL
+local function mask_url_api_key(url)
+    if not url then return url end
+    
+    local masked_url = url
+    
+    -- 匹配 /v2/{api_key}/ 格式（Alchemy风格）
+    masked_url = masked_url:gsub("(/v2/)([^/?]+)([/?]?)", function(prefix, api_key, suffix)
+        return prefix .. mask_api_key(api_key) .. suffix
+    end)
+    
+    -- 匹配 URL参数中的 api_key=xxx
+    masked_url = masked_url:gsub("([?&]api_key=)([^&]+)", function(prefix, api_key)
+        return prefix .. mask_api_key(api_key)
+    end)
+    
+    -- 匹配以太坊钱包地址（0x开头，40个十六进制字符）
+    -- 常见格式：/wallets/0x... /address/0x... 等
+    masked_url = masked_url:gsub("(0x)([0-9aA-fF][0-9aA-fF][0-9aA-fF][0-9aA-fF][0-9aA-fF][0-9aA-fF])([0-9aA-fF]+)",
+        function(prefix, first_chars, rest)
+            if #first_chars + #rest == 40 then
+                return mask_wallet_address(prefix .. first_chars .. rest)
+            end
+            return prefix .. first_chars .. rest
+        end)
+    
+    return masked_url
+end
+
+--- 脱敏请求体中的钱包地址
+-- @param body string 请求体（JSON格式）
+-- @return string 脱敏后的请求体
+local function mask_body_wallet_addresses(body)
+    if not body or type(body) ~= "string" or body == "" then
+        return body
+    end
+    
+    -- 匹配以太坊地址格式（0x开头，40个十六进制字符）
+    local masked_body = body:gsub('"0x([0-9aA-fF][0-9aA-fF][0-9aA-fF][0-9aA-fF][0-9aA-fF][0-9aA-fF])([0-9aA-fF]+)"',
+        function(prefix, rest)
+            local full_addr = prefix .. rest
+            if #full_addr == 40 then
+                return '"' .. mask_wallet_address("0x" .. full_addr) .. '"'
+            end
+            return '"0x' .. prefix .. rest .. '"'
+        end)
+    
+    return masked_body
+end
 -- 获取请求 ID
 local function get_request_id()
     local request_id = ngx.var.http_x_onekey_request_id
@@ -210,6 +301,8 @@ function _M.handle()
     
     -- 设置 Nginx 变量用于日志
     ngx.var.provider = provider_name
+    -- 设置脱敏后的路径用于访问日志
+    ngx.var.masked_path = mask_url_api_key(uri)
     
     -- 4. 限流检查
     local rl_allowed, rl_reason = rate_limiter.check_rate_limit(provider_name, ctx.client_ip)
@@ -240,7 +333,15 @@ function _M.handle()
     local method = ngx.req.get_method()
     local body = get_request_body()
     
-    ngx.log(ngx.DEBUG, "[", ctx.request_id, "] Upstream URL: ", upstream_url)
+    -- 脱敏后的URL用于日志记录
+    local masked_url = mask_url_api_key(upstream_url)
+    ngx.log(ngx.DEBUG, "[", ctx.request_id, "] Provider: ", provider_name, ", Upstream URL: ", masked_url)
+    
+    -- 脱敏请求体用于日志记录
+    local masked_body = mask_body_wallet_addresses(body)
+    if masked_body and masked_body ~= "" then
+        ngx.log(ngx.DEBUG, "[", ctx.request_id, "] Request Body: ", masked_body)
+    end
     
     -- 7. 发送请求
     local response, err = httpc:request_uri(upstream_url, {
@@ -260,7 +361,9 @@ function _M.handle()
         ngx.var.lua_upstream_status = tostring(response.status)
         ngx.var.lua_upstream_response_time = string.format("%.3f", duration / 1000)
         
-        ngx.log(ngx.INFO, "[", ctx.request_id, "] ", method, " ", uri, " -> ", response.status,
+        -- 脱敏URI用于日志（处理可能包含API Key的URI）
+        local masked_uri = mask_url_api_key(uri)
+        ngx.log(ngx.INFO, "[", ctx.request_id, "] Provider: ", provider_name, ", ", method, " ", masked_uri, " -> ", response.status,
                 " (", string.format("%.2f", duration), "ms)")
         
         -- 记录成功/失败（用于熔断器状态管理）
@@ -279,7 +382,9 @@ function _M.handle()
         ngx.var.lua_upstream_response_time = string.format("%.3f", duration / 1000)
         
         circuit_breaker.record_failure(provider_name)
-        ngx.log(ngx.ERR, "[", ctx.request_id, "] Upstream error: ", err)
+        -- 脱敏URI用于错误日志
+        local masked_uri = mask_url_api_key(uri)
+        ngx.log(ngx.ERR, "[", ctx.request_id, "] Provider: ", provider_name, ", URI: ", masked_uri, ", Upstream error: ", err)
         return send_error(502, "Bad Gateway: " .. (err or "unknown error"), ctx.request_id)
     end
 end
