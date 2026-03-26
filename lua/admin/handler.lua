@@ -294,4 +294,132 @@ function _M.distributed_rate_limit_reset()
     end
 end
 
+--- 配置管理 - 获取/更新完整配置
+-- GET /admin/config - 获取完整配置
+-- PUT /admin/config - 更新完整配置
+function _M.config_manage()
+    local config_manager = require "config_manager"
+    local method = ngx.req.get_method()
+    
+    if method == "GET" then
+        -- 获取完整配置
+        local cfg = config_manager.load_config()
+        local status = config_manager.get_status()
+        send_json(200, {
+            config = cfg,
+            status = status
+        })
+    elseif method == "PUT" then
+        -- 更新完整配置
+        ngx.req.read_body()
+        local body_data = ngx.req.get_body_data()
+        
+        if not body_data then
+            return send_error(400, "Request body is required")
+        end
+        
+        local decode_ok, new_config = pcall(cjson.decode, body_data)
+        if not decode_ok then
+            return send_error(400, "Invalid JSON format")
+        end
+        
+        local success, err = config_manager.update_config(new_config)
+        if success then
+            send_json(200, {
+                message = "Config updated successfully",
+                version = config_manager.get_config_version()
+            })
+        else
+            send_error(500, err or "Failed to update config")
+        end
+    else
+        send_error(405, "Method not allowed")
+    end
+end
+
+--- 配置状态
+-- GET /admin/config/status
+function _M.config_status()
+    local config_manager = require "config_manager"
+    local status = config_manager.get_status()
+    send_json(200, status)
+end
+
+--- 配置重置
+-- POST /admin/config/reset
+function _M.config_reset()
+    local config_manager = require "config_manager"
+    
+    local success = config_manager.reset_config()
+    if success then
+        send_json(200, {
+            message = "Config reset to default successfully",
+            version = config_manager.get_config_version()
+        })
+    else
+        send_error(500, "Failed to reset config")
+    end
+end
+
+--- 配置项操作
+-- GET /admin/config/:path - 获取配置项
+-- PUT /admin/config/:path - 设置配置项
+function _M.config_item()
+    local config_manager = require "config_manager"
+    local uri = ngx.var.uri
+    local path = uri:match("^/admin/config/(.+)$")
+    local method = ngx.req.get_method()
+    
+    if not path then
+        return send_error(400, "Invalid config path")
+    end
+    
+    -- URL解码路径（将%2E转换为.等）
+    path = ngx.unescape_uri(path)
+    
+    if method == "GET" then
+        -- 获取配置项
+        local value = config_manager.get(path)
+        if value == nil then
+            return send_error(404, "Config path not found: " .. path)
+        end
+        send_json(200, {
+            path = path,
+            value = value
+        })
+    elseif method == "PUT" then
+        -- 设置配置项
+        ngx.req.read_body()
+        local body_data = ngx.req.get_body_data()
+        
+        if not body_data then
+            return send_error(400, "Request body is required")
+        end
+        
+        local decode_ok, body = pcall(cjson.decode, body_data)
+        if not decode_ok then
+            return send_error(400, "Invalid JSON format")
+        end
+        
+        local value = body.value
+        if value == nil then
+            return send_error(400, " 'value' field is required")
+        end
+        
+        local success = config_manager.set(path, value)
+        if success then
+            send_json(200, {
+                message = "Config item updated successfully",
+                path = path,
+                value = value,
+                version = config_manager.get_config_version()
+            })
+        else
+            send_error(500, "Failed to update config item")
+        end
+    else
+        send_error(405, "Method not allowed")
+    end
+end
+
 return _M

@@ -42,18 +42,19 @@ _M.retryable_errors = {
 --- 获取重试配置
 -- @return table 重试配置
 function _M.get_config()
-    local enabled_str = os.getenv("RETRY_ENABLED") or "true"
-    local max_attempts = tonumber(os.getenv("RETRY_MAX_ATTEMPTS")) or 3
-    local initial_delay = tonumber(os.getenv("RETRY_INITIAL_DELAY")) or 100
-    local max_delay = tonumber(os.getenv("RETRY_MAX_DELAY")) or 5000
-    local multiplier = tonumber(os.getenv("RETRY_MULTIPLIER")) or 2
+    -- 使用 config模块获取配置（支持热更新）
+    local retry_config = config.get_retry_config()
+    if retry_config then
+        return retry_config
+    end
     
+    -- 回退到默认值
     return {
-        enabled = enabled_str:lower() == "true",
-        max_attempts = max_attempts,       -- 最大重试次数（包括首次请求）
-        initial_delay = initial_delay,     -- 初始延迟（毫秒）
-        max_delay = max_delay,             -- 最大延迟（毫秒）
-        multiplier = multiplier            -- 延迟倍数
+        enabled = true,
+        max_attempts = 3,
+        initial_delay = 3000,
+        max_delay = 30000,
+        multiplier = 2
     }
 end
 

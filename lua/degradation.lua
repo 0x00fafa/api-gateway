@@ -21,15 +21,25 @@ _M.DEGRADATION_TYPE = {
 --- 获取降级配置
 -- @return table 降级配置
 function _M.get_config()
-    local enabled_str = os.getenv("DEGRADATION_ENABLED") or "true"
-    local stale_cache_enabled_str = os.getenv("DEGRADATION_STALE_CACHE_ENABLED") or "true"
-    local stale_cache_max_age = tonumber(os.getenv("DEGRADATION_STALE_CACHE_MAX_AGE")) or 300
+    -- 使用 config模块获取配置（支持热更新）
+    local degradation_config = config.get_degradation_config()
+    if degradation_config then
+        -- 转换为模块内部格式
+        return {
+            enabled = degradation_config.enabled,
+            stale_cache = {
+                enabled = degradation_config.stale_cache_enabled,
+                max_age = degradation_config.stale_cache_max_age
+            }
+        }
+    end
     
+    -- 回退到默认值
     return {
-        enabled = enabled_str:lower() == "true",
+        enabled = true,
         stale_cache = {
-            enabled = stale_cache_enabled_str:lower() == "true",
-            max_age = stale_cache_max_age  -- 过期缓存最大可用时间（秒）
+            enabled = true,
+            max_age = 300
         }
     }
 end

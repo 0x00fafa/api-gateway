@@ -16,27 +16,40 @@ local local_buckets = {}
 --- 获取分布式限流配置
 -- @return table 配置表
 function _M.get_config()
-    local enabled_str = os.getenv("DISTRIBUTED_RATE_LIMIT_ENABLED") or "false"
-    local redis_host = os.getenv("DISTRIBUTED_RATE_LIMIT_REDIS_HOST") or "127.0.0.1"
-    local redis_port = tonumber(os.getenv("DISTRIBUTED_RATE_LIMIT_REDIS_PORT")) or 6379
-    local redis_password = os.getenv("DISTRIBUTED_RATE_LIMIT_REDIS_PASSWORD") or ""
-    local redis_db = tonumber(os.getenv("DISTRIBUTED_RATE_LIMIT_REDIS_DB")) or 0
-    local sync_interval = tonumber(os.getenv("DISTRIBUTED_RATE_LIMIT_SYNC_INTERVAL")) or 1  -- 同步间隔（秒）
-    local local_capacity_ratio = tonumber(os.getenv("DISTRIBUTED_RATE_LIMIT_LOCAL_RATIO")) or 0.2  -- 本地配额比例
+    -- 使用 config模块获取配置（支持热更新）
+    local drl_config = config.get_distributed_rate_limit_config()
+    if drl_config then
+        -- 转换为模块内部格式
+        return {
+            enabled = drl_config.enabled,
+            redis = {
+                host = drl_config.redis_host,
+                port = drl_config.redis_port,
+                password = drl_config.redis_password ~= "" and drl_config.redis_password or nil,
+                db = drl_config.redis_db,
+                timeout = 1000,  -- 1秒
+                keepalive_timeout = 10000,  -- 10秒
+                keepalive_pool = 10
+            },
+            sync_interval = drl_config.sync_interval,
+            local_capacity_ratio = drl_config.local_ratio
+        }
+    end
     
+    -- 回退到默认值
     return {
-        enabled = enabled_str:lower() == "true",
+        enabled = false,
         redis = {
-            host = redis_host,
-            port = redis_port,
-            password = redis_password ~= "" and redis_password or nil,
-            db = redis_db,
-            timeout = 1000,  -- 1秒
-            keepalive_timeout = 10000,  -- 10秒
+            host = "127.0.0.1",
+            port = 6379,
+            password = nil,
+            db = 0,
+            timeout = 1000,
+            keepalive_timeout = 10000,
             keepalive_pool = 10
         },
-        sync_interval = sync_interval,
-        local_capacity_ratio = local_capacity_ratio
+        sync_interval = 1,
+        local_capacity_ratio = 0.2
     }
 end
 

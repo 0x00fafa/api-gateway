@@ -22,6 +22,9 @@ RUN mkdir -p /var/log/openresty \
 # 复制 Lua 模块
 COPY lua/ /usr/local/openresty/lualib/custom/
 
+# 复制 .env 配置文件（用于 config_manager 读取）
+COPY .env /usr/local/openresty/lualib/custom/.env
+
 # 复制 Nginx 配置
 COPY conf/nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
 
