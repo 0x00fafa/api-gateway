@@ -62,6 +62,16 @@ services:
       - DEGRADATION_ENABLED=${DEGRADATION_ENABLED:-true}
       - DEGRADATION_STALE_CACHE_ENABLED=${DEGRADATION_STALE_CACHE_ENABLED:-true}
       - DEGRADATION_STALE_CACHE_MAX_AGE=${DEGRADATION_STALE_CACHE_MAX_AGE:-300}
+      # 分布式限流配置
+      - DISTRIBUTED_RATE_LIMIT_ENABLED=${DISTRIBUTED_RATE_LIMIT_ENABLED:-false}
+      - DISTRIBUTED_RATE_LIMIT_REDIS_HOST=${DISTRIBUTED_RATE_LIMIT_REDIS_HOST:-redis}
+      - DISTRIBUTED_RATE_LIMIT_REDIS_PORT=${DISTRIBUTED_RATE_LIMIT_REDIS_PORT:-6379}
+      - DISTRIBUTED_RATE_LIMIT_REDIS_PASSWORD=${DISTRIBUTED_RATE_LIMIT_REDIS_PASSWORD:-}
+      - DISTRIBUTED_RATE_LIMIT_REDIS_DB=${DISTRIBUTED_RATE_LIMIT_REDIS_DB:-0}
+      - DISTRIBUTED_RATE_LIMIT_SYNC_INTERVAL=${DISTRIBUTED_RATE_LIMIT_SYNC_INTERVAL:-1}
+      - DISTRIBUTED_RATE_LIMIT_LOCAL_RATIO=${DISTRIBUTED_RATE_LIMIT_LOCAL_RATIO:-0.2}
+    depends_on:
+      - redis
     volumes:
       # 开发模式：挂载配置和代码（生产环境应移除）
       - ./conf/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
@@ -77,3 +87,22 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+
+  # Redis for distributed rate limiting
+  redis:
+    image: redis:7-alpine
+    container_name: api-gateway-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  redis-data:

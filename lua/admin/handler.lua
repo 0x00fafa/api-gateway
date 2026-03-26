@@ -259,4 +259,39 @@ function _M.health()
     send_json(status_code, health_status)
 end
 
+--- 分布式限流状态
+-- GET /admin/distributed-rate-limit
+function _M.distributed_rate_limit_status()
+    local distributed_rate_limiter = require "distributed_rate_limiter"
+    local args = ngx.req.get_uri_args()
+    local key = args.key or "global"
+    local rate = tonumber(args.rate) or 100
+    local capacity = tonumber(args.capacity) or 1000
+    
+    local status = distributed_rate_limiter.get_status(key, rate, capacity)
+    send_json(200, status)
+end
+
+--- 分布式限流重置
+-- POST /admin/distributed-rate-limit/reset
+function _M.distributed_rate_limit_reset()
+    local distributed_rate_limiter = require "distributed_rate_limiter"
+    local args = ngx.req.get_uri_args()
+    local key = args.key
+    
+    if not key then
+        return send_error(400, "Key parameter is required")
+    end
+    
+    local success = distributed_rate_limiter.reset(key)
+    if success then
+        send_json(200, {
+            message = "Distributed rate limit reset successfully",
+            key = key
+        })
+    else
+        send_error(500, "Failed to reset distributed rate limit")
+    end
+end
+
 return _M
