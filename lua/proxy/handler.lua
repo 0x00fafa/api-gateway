@@ -11,6 +11,7 @@ local cache = require "cache"
 local transformer = require "transformer"
 local error_module = require "transformer.error"
 local retry = require "retry"
+local degradation = require "degradation"
 
 local _M = {}
 
@@ -574,6 +575,26 @@ function _M.handle()
         -- 脱敏URI用于错误日志
         local masked_uri = mask_url_api_key(uri)
         ngx.log(ngx.ERR, "[", ctx.request_id, "] Provider: ", provider_name, ", URI: ", masked_uri, ", Upstream error: ", err)
+        
+        -- 尝试优雅降级
+        local degradation_type = degradation.DEGRADATION_TYPE.UPSTREAM_ERROR
+        if err and string.find(string.lower(err), "timeout", 1, true) then
+            degradation_type = degradation.DEGRADATION_TYPE.TIMEOUT
+        end
+        
+        local degraded = degradation.try_degrade(ctx.cache_key, ctx, degradation_type, {
+            status = 502,
+            message = "Bad Gateway",
+            detail = "上游服务不可用: " .. (err or "unknown error"),
+            retry_after = 30
+        })
+        
+        -- 如果降级成功，直接返回（响应已发送）
+        if degraded then
+            return
+        end
+        
+        -- 降级失败，返回标准错误响应
         return send_error(502, "Bad Gateway: " .. (err or "unknown error"), ctx, error_module.ERROR_TYPE.UPSTREAM_ERROR)
     end
 end

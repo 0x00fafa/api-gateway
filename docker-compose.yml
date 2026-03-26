@@ -58,6 +58,10 @@ services:
       - RETRY_INITIAL_DELAY=${RETRY_INITIAL_DELAY:-100}
       - RETRY_MAX_DELAY=${RETRY_MAX_DELAY:-5000}
       - RETRY_MULTIPLIER=${RETRY_MULTIPLIER:-2}
+      # 优雅降级配置
+      - DEGRADATION_ENABLED=${DEGRADATION_ENABLED:-true}
+      - DEGRADATION_STALE_CACHE_ENABLED=${DEGRADATION_STALE_CACHE_ENABLED:-true}
+      - DEGRADATION_STALE_CACHE_MAX_AGE=${DEGRADATION_STALE_CACHE_MAX_AGE:-300}
     volumes:
       # 开发模式：挂载配置和代码（生产环境应移除）
       - ./conf/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
