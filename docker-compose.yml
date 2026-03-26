@@ -48,6 +48,16 @@ services:
       # 响应转换配置
       - RESPONSE_TRANSFORM_ENABLED=${RESPONSE_TRANSFORM_ENABLED:-false}
       - RESPONSE_FORMAT=${RESPONSE_FORMAT:-unified}
+      # 超时配置
+      - TIMEOUT_CONNECT=${TIMEOUT_CONNECT:-5000}
+      - TIMEOUT_SEND=${TIMEOUT_SEND:-10000}
+      - TIMEOUT_READ=${TIMEOUT_READ:-30000}
+      # 重试配置
+      - RETRY_ENABLED=${RETRY_ENABLED:-true}
+      - RETRY_MAX_ATTEMPTS=${RETRY_MAX_ATTEMPTS:-3}
+      - RETRY_INITIAL_DELAY=${RETRY_INITIAL_DELAY:-100}
+      - RETRY_MAX_DELAY=${RETRY_MAX_DELAY:-5000}
+      - RETRY_MULTIPLIER=${RETRY_MULTIPLIER:-2}
     volumes:
       # 开发模式：挂载配置和代码（生产环境应移除）
       - ./conf/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro

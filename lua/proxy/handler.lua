@@ -10,6 +10,7 @@ local geoip = require "geoip"
 local cache = require "cache"
 local transformer = require "transformer"
 local error_module = require "transformer.error"
+local retry = require "retry"
 
 local _M = {}
 
@@ -490,7 +491,7 @@ function _M.handle()
     
     -- 8. 构建上游请求
     local httpc = http.new()
-    local timeout = ctx.provider_config.timeout or config.timeout.read
+    local timeout = config.get_provider_timeout(provider_name)
     httpc:set_timeout(timeout)
     
     local upstream_url, url_err = build_upstream_url(ctx.provider_config, path, api_key)
@@ -510,15 +511,25 @@ function _M.handle()
         ngx.log(ngx.DEBUG, "[", ctx.request_id, "] Request Body: ", masked_body)
     end
     
-    -- 7. 发送请求
-    local response, err = httpc:request_uri(upstream_url, {
-        method = method,
-        headers = upstream_headers,
-        body = body,
-        ssl_verify = false,  -- 生产环境应启用
-        keepalive_timeout = 60,
-        keepalive_pool = 10
-    })
+    -- 9. 发送请求（带重试）
+    local request_fn = function()
+        -- 每次重试需要创建新的HTTP连接
+        local retry_httpc = http.new()
+        retry_httpc:set_timeout(timeout)
+        
+        local res, req_err = retry_httpc:request_uri(upstream_url, {
+            method = method,
+            headers = upstream_headers,
+            body = body,
+            ssl_verify = false,  -- 生产环境应启用
+            keepalive_timeout = 60,
+            keepalive_pool = 10
+        })
+        
+        return res, req_err
+    end
+    
+    local response, err = retry.do_with_retry(request_fn, method, provider_name, ctx)
     
     local duration = (ngx.now() - ctx.start_time) * 1000  -- 毫秒
     

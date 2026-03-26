@@ -179,4 +179,26 @@ function _M.get_response_transform_config()
     }
 end
 
+-- 获取超时配置
+function _M.get_timeout_config()
+    local connect_timeout = tonumber(os.getenv("TIMEOUT_CONNECT")) or 5000
+    local send_timeout = tonumber(os.getenv("TIMEOUT_SEND")) or 10000
+    local read_timeout = tonumber(os.getenv("TIMEOUT_READ")) or 30000
+    
+    return {
+        connect = connect_timeout,  -- 连接超时（毫秒）
+        send = send_timeout,        -- 发送超时（毫秒）
+        read = read_timeout         -- 读取超时（毫秒）
+    }
+end
+
+-- 获取Provider超时配置（覆盖全局配置）
+function _M.get_provider_timeout(provider_name)
+    local provider = _M.get_provider(provider_name)
+    if provider and provider.timeout then
+        return provider.timeout
+    end
+    return _M.get_timeout_config().read
+end
+
 return _M
