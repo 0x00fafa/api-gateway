@@ -1,0 +1,9 @@
+Running 30s test @ https://api.0x00fafa.com/zerion/v1/wallets/0x831b3291917C51bbAca867f178742ccc87d17227/portfolio
+  4 threads and 100 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    99.83ms   41.72ms   1.19s    88.24%
+    Req/Sec   257.85     69.64   420.00     65.82%
+  30406 requests in 30.10s, 19.41MB read
+  Non-2xx or 3xx responses: 30376
+Requests/sec:   1010.26
+Transfer/sec:    660.34KB

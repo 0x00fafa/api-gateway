@@ -450,13 +450,16 @@ function _M.handle()
     local cache_config = config.get_cache_config()
     local cache_status = "BYPASS"  -- 默认绕过缓存
     
+    -- 安全获取 providers 配置
+    local providers_config = cache_config.providers or {}
+    
     -- 使用INFO级别确保日志输出
     ngx.log(ngx.INFO, "[Cache] config: enabled=", tostring(cache_config.enabled),
             ", policy=", cache_config.policy or "nil",
-            ", provider_ttl=", tostring(cache_config.providers[provider_name]))
+            ", provider_ttl=", tostring(providers_config[provider_name]))
     
     if cache.is_cacheable(provider_name, method, ctx.provider_config) then
-        cache_ttl = cache_config.providers[provider_name] or cache_config.default_ttl
+        cache_ttl = providers_config[provider_name] or cache_config.default_ttl
         cache_key = cache.generate_cache_key(provider_name, method, ngx.var.uri, body)
         cache_status = "MISS"  -- 可缓存，标记为MISS
         

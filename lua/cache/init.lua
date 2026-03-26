@@ -64,9 +64,10 @@ function _M.is_cacheable(provider, method, provider_config)
     end
     
     -- 检查provider是否在缓存白名单中
-    local provider_ttl = cache_config.providers[provider]
+    local providers_config = cache_config.providers or {}
+    local provider_ttl = providers_config[provider]
     ngx.log(ngx.INFO, "[Cache] is_cacheable: provider_ttl=", tostring(provider_ttl),
-            ", providers_config=", require("cjson").encode(cache_config.providers))
+            ", providers_config=", require("cjson").encode(providers_config))
     
     if not provider_ttl or provider_ttl <= 0 then
         ngx.log(ngx.INFO, "[Cache] is_cacheable: provider not in cache list or TTL <= 0")

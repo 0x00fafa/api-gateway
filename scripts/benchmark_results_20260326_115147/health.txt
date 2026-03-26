@@ -1,0 +1,8 @@
+Running 30s test @ https://api.0x00fafa.com/health
+  4 threads and 100 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    13.80ms    8.79ms 263.17ms   93.90%
+    Req/Sec     1.90k   371.64     3.53k    75.69%
+  225049 requests in 30.09s, 52.56MB read
+Requests/sec:   7480.33
+Transfer/sec:      1.75MB
