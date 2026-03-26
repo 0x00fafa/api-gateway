@@ -1,5 +1,5 @@
 --- OpenResty API Proxy Gateway - 代理处理器
--- 
+--
 
 local http = require "resty.http"
 local cjson = require "cjson"
@@ -7,6 +7,9 @@ local config = require "config"
 local circuit_breaker = require "circuit_breaker"
 local rate_limiter = require "rate_limiter"
 local geoip = require "geoip"
+local cache = require "cache"
+local transformer = require "transformer"
+local error_module = require "transformer.error"
 
 local _M = {}
 
@@ -332,7 +335,22 @@ local function get_request_body()
     return body
 end
 -- 发送响应
-local function send_response(response)
+local function send_response(response, ctx)
+    ngx.log(ngx.INFO, "[Proxy] send_response called, provider: ", ctx and ctx.provider or "nil")
+    
+    -- 检查是否启用响应转换
+    local transform_enabled = transformer.is_enabled()
+    ngx.log(ngx.INFO, "[Proxy] transform_enabled: ", tostring(transform_enabled))
+    
+    if transform_enabled then
+        -- 使用统一格式响应
+        ngx.log(ngx.INFO, "[Proxy] Using unified response format")
+        local transformed = transformer.transform_response(ctx.provider, response, ctx)
+        transformer.send_transformed_response(transformed, response)
+        return
+    end
+    
+    -- 原始透传逻辑（向后兼容）
     -- 设置响应头
     if response.headers then
         for k, v in pairs(response.headers) do
@@ -349,14 +367,29 @@ local function send_response(response)
         ngx.print(response.body)
     end
 end
+
 -- 发送错误响应
-local function send_error(status, message, request_id)
+local function send_error(status, message, ctx, error_type)
+    -- 检查是否启用响应转换
+    if transformer.is_enabled() then
+        -- 使用统一格式错误响应
+        local request_id = ctx and ctx.request_id or ""
+        local transformed = transformer.transform_error(status, message, ctx, error_type)
+        ngx.status = status
+        ngx.header["Content-Type"] = "application/json"
+        ngx.header["X-Onekey-Request-Id"] = request_id
+        ngx.say(cjson.encode(transformed))
+        return
+    end
+    
+    -- 原始错误格式（向后兼容）
+    local request_id = ctx and ctx.request_id or ""
     ngx.status = status
     ngx.header["Content-Type"] = "application/json"
-    ngx.header["X-Onekey-Request-Id"] = request_id or ""
+    ngx.header["X-Onekey-Request-Id"] = request_id
     ngx.say(cjson.encode({
         error = message,
-        request_id = request_id or ""
+        request_id = request_id
     }))
 end
 -- 主处理函数
@@ -376,7 +409,7 @@ function _M.handle()
     local provider_name, path = parse_path(uri)
     
     if not provider_name or not config.has_provider(provider_name) then
-        return send_error(404, "Provider not found. Valid providers: /zerion, /coingecko, /alchemy", ctx.request_id)
+        return send_error(404, "Provider not found. Valid providers: /zerion, /coingecko, /alchemy", ctx, error_module.ERROR_TYPE.NOT_FOUND_ERROR)
     end
     
     ctx.provider = provider_name
@@ -405,20 +438,67 @@ function _M.handle()
     
     -- 6. 获取客户端 API Key
     local api_key = get_client_api_key()
+    local method = ngx.req.get_method()
+    local body = get_request_body()
     
-    -- 7. 构建上游请求
+    -- 7. 缓存检查（仅对可缓存请求）
+    local cache_key = nil
+    local cache_ttl = nil
+    local cache_config = config.get_cache_config()
+    local cache_status = "BYPASS"  -- 默认绕过缓存
+    
+    -- 使用INFO级别确保日志输出
+    ngx.log(ngx.INFO, "[Cache] config: enabled=", tostring(cache_config.enabled),
+            ", policy=", cache_config.policy or "nil",
+            ", provider_ttl=", tostring(cache_config.providers[provider_name]))
+    
+    if cache.is_cacheable(provider_name, method, ctx.provider_config) then
+        cache_ttl = cache_config.providers[provider_name] or cache_config.default_ttl
+        cache_key = cache.generate_cache_key(provider_name, method, ngx.var.uri, body)
+        cache_status = "MISS"  -- 可缓存，标记为MISS
+        
+        ngx.log(ngx.INFO, "[Cache] key: ", cache_key, ", TTL: ", tostring(cache_ttl))
+        
+        -- 尝试从缓存获取
+        local cached_response = cache.get(cache_key)
+        if cached_response then
+            -- 缓存命中，直接返回
+            cache_status = "HIT"
+            ctx.cache_status = cache_status
+            ngx.log(ngx.INFO, "[Cache] HIT: ", provider_name, " ", method, " ", mask_url_api_key(ngx.var.uri))
+            
+            -- 构建响应对象（用于转换器）
+            local response_obj = {
+                status = cached_response.status,
+                headers = cached_response.headers or {},
+                body = cached_response.body
+            }
+            response_obj.headers["X-Cache-Status"] = "HIT"
+            response_obj.headers["X-Cache-TTL"] = tostring(math.floor(cached_response.expires_at - ngx.now()))
+            
+            -- 使用send_response处理（支持响应转换）
+            return send_response(response_obj, ctx)
+        else
+            ngx.log(ngx.INFO, "[Cache] MISS: ", provider_name, " ", method, " ", mask_url_api_key(ngx.var.uri))
+        end
+    end
+    
+    -- 设置缓存状态到上下文，用于后续添加响应头
+    ctx.cache_status = cache_status
+    ctx.cache_key = cache_key
+    ctx.cache_ttl = cache_ttl
+    
+    -- 8. 构建上游请求
     local httpc = http.new()
     local timeout = ctx.provider_config.timeout or config.timeout.read
     httpc:set_timeout(timeout)
     
     local upstream_url, url_err = build_upstream_url(ctx.provider_config, path, api_key)
     if not upstream_url then
-        return send_error(401, url_err or "API Key is required", ctx.request_id)
+        return send_error(401, url_err or "API Key is required", ctx, error_module.ERROR_TYPE.AUTH_ERROR)
     end
     
     local upstream_headers = build_upstream_headers(ctx.provider_config, ctx.request_id, api_key)
-    local method = ngx.req.get_method()
-    local body = get_request_body()
     
     -- 脱敏后的URL用于日志记录
     local masked_url = mask_url_api_key(upstream_url)
@@ -442,7 +522,7 @@ function _M.handle()
     
     local duration = (ngx.now() - ctx.start_time) * 1000  -- 毫秒
     
-    -- 8. 处理响应
+    -- 9. 处理响应
     if response then
         -- 设置上游状态和响应时间变量（用于日志）
         ngx.var.lua_upstream_status = tostring(response.status)
@@ -457,11 +537,22 @@ function _M.handle()
         -- 2xx和 3xx 视为成功，4xx 和 5xx 视为失败
         if response.status >= 200 and response.status < 400 then
             circuit_breaker.record_success(provider_name)
+            
+            -- 10. 保存到缓存（仅对可缓存的请求）
+            if ctx.cache_key and ctx.cache_ttl then
+                cache.set(ctx.cache_key, response, ctx.cache_ttl)
+            end
         else
             circuit_breaker.record_failure(provider_name)
         end
         
-        return send_response(response)
+        -- 添加缓存状态响应头
+        if not response.headers then
+            response.headers = {}
+        end
+        response.headers["X-Cache-Status"] = ctx.cache_status or "BYPASS"
+        
+        return send_response(response, ctx)
     else
         -- 网络错误、超时等也需要记录失败
         -- 设置上游状态变量（用于日志）
@@ -472,7 +563,7 @@ function _M.handle()
         -- 脱敏URI用于错误日志
         local masked_uri = mask_url_api_key(uri)
         ngx.log(ngx.ERR, "[", ctx.request_id, "] Provider: ", provider_name, ", URI: ", masked_uri, ", Upstream error: ", err)
-        return send_error(502, "Bad Gateway: " .. (err or "unknown error"), ctx.request_id)
+        return send_error(502, "Bad Gateway: " .. (err or "unknown error"), ctx, error_module.ERROR_TYPE.UPSTREAM_ERROR)
     end
 end
 

@@ -143,4 +143,40 @@ function _M.get_rate_limiter_config()
     }
 end
 
+-- 获取缓存配置
+function _M.get_cache_config()
+    local enabled_str = os.getenv("CACHE_ENABLED") or "false"
+    local policy = os.getenv("CACHE_POLICY") or "get_only"  -- never, get_only, all
+    local providers_str = os.getenv("CACHE_PROVIDERS") or '{"zerion":60,"coingecko":300,"alchemy":30}'
+    local default_ttl = tonumber(os.getenv("CACHE_DEFAULT_TTL")) or 60
+    local max_size = tonumber(os.getenv("CACHE_MAX_SIZE")) or 100  -- MB
+    
+    -- 解析 Provider 缓存TTL配置
+    local providers = {}
+    local decode_ok, providers_data = pcall(cjson.decode, providers_str)
+    if decode_ok and type(providers_data) == "table" then
+        providers = providers_data
+    end
+    
+    return {
+        enabled = enabled_str:lower() == "true",
+        policy = policy,  -- never, get_only, all
+        providers = providers,
+        default_ttl = default_ttl,
+        max_size = max_size
+    }
+end
+
+-- 获取响应转换配置
+function _M.get_response_transform_config()
+    local enabled_str = os.getenv("RESPONSE_TRANSFORM_ENABLED") or "false"
+    local format = os.getenv("RESPONSE_FORMAT") or "unified"  -- unified / raw
+    
+    return {
+        enabled = enabled_str:lower() == "true",
+        format = format,  -- unified: 统一格式, raw: 原始格式
+        include_meta = true  -- 是否包含meta信息
+    }
+end
+
 return _M
